@@ -1,55 +1,43 @@
 
-# lyrics_to_song_app.py
-
 import streamlit as st
 from transformers import pipeline
+import torch
 import torchaudio
-import os
 import tempfile
+import os
 
-# Define pipelines
-lyrics_to_melody = pipeline("text-to-audio", model="facebook/musicgen-small")
-tts = pipeline("text-to-speech", model="facebook/tts_transformer-es-css10")
-
-# UI
-st.set_page_config(page_title="Lyrics to Song Generator 🎵")
+# Initialize pipelines
 st.title("🎼 Lyrics to Song Generator")
-st.markdown("Type in your lyrics, and we'll convert them into a song with background music!")
+st.markdown("Type your lyrics and choose a voice. We’ll turn your lyrics into a song!")
 
-# Input
-lyrics = st.text_area("Enter your lyrics here:", height=300)
-voice_options = ["male", "female"]
-voice_choice = st.radio("Choose a voice for singing:", voice_options)
+with st.spinner("Loading models..."):
+    melody_gen = pipeline("text-to-audio", model="facebook/musicgen-small")
+    tts_gen = pipeline("text-to-speech", model="facebook/tts_transformer-es-css10")
 
-# Generate song
+lyrics = st.text_area("Enter your lyrics here", height=300)
+voice = st.radio("Choose a voice:", ["male", "female"])
+
 if st.button("Generate Song 🎤") and lyrics:
-    with st.spinner("Generating music and vocals..."):
-        # Generate instrumental track
-        music_output = lyrics_to_melody(lyrics, forward_params={"do_sample": True})
+    with st.spinner("Generating background music..."):
+        melody = melody_gen(lyrics, forward_params={"do_sample": True})
+        melody_audio = melody["audio"].unsqueeze(0)  # Shape: [1, samples]
+        melody_sr = 32000
 
-        # Save the instrumental
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_music:
-            torchaudio.save(temp_music.name, music_output["audio"].unsqueeze(0), 32000)
-            music_file = temp_music.name
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as music_file:
+        torchaudio.save(music_file.name, melody_audio, sample_rate=melody_sr)
+        st.audio(music_file.name, format="audio/wav", start_time=0)
+        st.success("Background music generated!")
 
-        # Generate vocals (TTS)
-        tts_output = tts(lyrics, forward_params={"voice": voice_choice})
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_vocal:
-            torchaudio.save(temp_vocal.name, tts_output["audio"].unsqueeze(0), 22050)
-            vocal_file = temp_vocal.name
+    with st.spinner("Generating vocal track..."):
+        tts_out = tts_gen(lyrics, forward_params={"voice": voice})
+        vocal_audio = tts_out["audio"].unsqueeze(0)
+        vocal_sr = 22050
 
-        # Combine vocals + music using ffmpeg (external tool)
-        final_song = os.path.join(tempfile.gettempdir(), "final_song.wav")
-        os.system(f"ffmpeg -i {music_file} -i {vocal_file} -filter_complex amix=inputs=2:duration=longest {final_song} -y")
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as vocal_file:
+        torchaudio.save(vocal_file.name, vocal_audio, sample_rate=vocal_sr)
+        st.audio(vocal_file.name, format="audio/wav", start_time=0)
+        st.success("Vocal audio generated!")
 
-        # Show results
-        st.audio(final_song, format="audio/wav")
-        st.success("Done! Your song is ready 🎶")
+    st.markdown("""⚠️ Due to Streamlit Sharing limitations, music and vocal tracks are not mixed here.
+Please download and combine them offline using Audacity or any audio editor.""")
 
-        # Cleanup
-        os.remove(music_file)
-        os.remove(vocal_file)
-        os.remove(final_song)
-
-else:
-    st.info("Enter some lyrics and click the button to generate a song.")
